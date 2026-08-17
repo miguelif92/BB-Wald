@@ -326,6 +326,7 @@ In Figures 5 and 6 are displayed the filtered 3D LiDAR point cloud of the circul
 #Figure 4. 3D Point Cloud Data.
 plot(plot_las)
 ```
+![3D View](img/3d_plot.png)
 
 ## 2.2 Elevation models
 
@@ -390,8 +391,6 @@ grid(col = "grey50", lty = "dashed")
 
 ![](bb_lidar_files/figure-html/unnamed-chunk-8-1.png)<!-- -->
 
-
-
 ``` r
 #Figure 6. DTM
 dsm <- raster("tif/dsm.tif")
@@ -450,6 +449,9 @@ grid(col = "grey50", lty = "dashed")
 
 ![](bb_lidar_files/figure-html/unnamed-chunk-9-1.png)<!-- -->
 
+
+![DTM & DSM Views](img/DEM.jpeg)
+
 ## 2.3 Data normalisation
 
 Figures 8 and 9 illustrate the normalized 3D LiDAR point cloud of the circular forest sampling plot, representing a critical stage where vertical forest structure is isolated from the underlying topography. The data has been processed using the K-Nearest Neighbour Inverse Distance Weighting (KNN-IDW) algorithm to subtract the terrain elevation, effectively setting the forest floor to a base height of zero. Prior to this normalization, the raw point cloud was cleaned and filtered using the Statistical Outlier Removal (SOR) algorithm to eliminate sensor artifacts and "sky noise," ensuring the structural integrity of the trees visible in the spectral colour ramp. This high-fidelity, normalized output allows the LMF to precisely identify tree tops and provides the necessary input for the Li *et al.* (2012), Dalponte & Coomes (2016), and Silva *et al.* (2016) algorithms to calculate accurate individual tree metrics for forest site.
@@ -460,6 +462,7 @@ Figures 8 and 9 illustrate the normalized 3D LiDAR point cloud of the circular f
 plot(plot_norm)
 ```
 
+![Normalised 3D View](img/3d_plot_normal.png)
 
 ## 2.4 Canopy Height Model (CHM)
 
@@ -516,6 +519,8 @@ grid(col = "grey50", lty = "dashed")
 ```
 
 ![](bb_lidar_files/figure-html/unnamed-chunk-11-1.png)<!-- -->
+
+![3D View](img/CHM.jpeg)
 
 ## 2.5 Crown segmentation
 
@@ -667,7 +672,7 @@ legend("topright", legend = round(breaks$brks[-1], 1),
 
 ![](bb_lidar_files/figure-html/unnamed-chunk-15-1.png)<!-- -->
 
-
+![Segmentation](img/Plot.jpeg)
 
 ``` r
 # Here all the crown polygons are imported for statistical analysis
@@ -782,7 +787,7 @@ print(boxplot_area)
 
 ![](bb_lidar_files/figure-html/unnamed-chunk-18-1.png)<!-- -->
 
-
+![Crown area boxplot](img/boxplot_area.png)
 ``` r
 #Violinplot
 violin_area <- crown %>%
@@ -801,7 +806,7 @@ print(violin_area)
 
 ![](bb_lidar_files/figure-html/unnamed-chunk-19-1.png)<!-- -->
 
-
+![Crown area violinplot](img/violin_area.png)
 ``` r
 #Density function for Area for algorithm
 density_area <- ggplot(crown, aes(x = area, colour = algorithm)) +
@@ -826,6 +831,8 @@ print(density_area)
 ```
 
 ![](bb_lidar_files/figure-html/unnamed-chunk-20-1.png)<!-- -->
+
+![Density chart for crown area](img/density_area.png)
 
 The comprehensive analysis demonstrates that while through P2R the CHM was generated ([Figure 10](#Figure10)), it provides a consistent vertical baseline, the choice of segmentation algorithm introduces statistically significant variations in forest inventory metrics. In contrast, the analysis of maximum height across [Table 2](#Table2) shows remarkable vertical consistency, with all algorithms capturing the same peak height of 39.93 m and maintaining similar standard deviations, suggesting that algorithmic divergence is more pronounced in horizontal delineation than in vertical estimation.
 
@@ -890,6 +897,7 @@ print(boxplot_h)
 
 ![](bb_lidar_files/figure-html/unnamed-chunk-22-1.png)<!-- -->
 
+![Tree height boxplot](img/boxplot_h.png)
 
 ``` r
 #Violin
@@ -910,6 +918,7 @@ print(violin_h)
 
 ![](bb_lidar_files/figure-html/unnamed-chunk-23-1.png)<!-- -->
 
+![Tree height violinplot](img/violin_h.png)
 
 ``` r
 #Density function for Height for algorithm
@@ -922,7 +931,7 @@ print(density_h)
 
 ![](bb_lidar_files/figure-html/unnamed-chunk-24-1.png)<!-- -->
 
-
+![Tree height density chart](img/density_h.png)
 ``` r
 #Scatterplot
 scat <- ggplot(crown, aes(x = area, y = Z_max, color = algorithm)) + 
@@ -945,6 +954,8 @@ print(scat)
 ```
 
 ![](bb_lidar_files/figure-html/unnamed-chunk-25-1.png)<!-- -->
+
+![Scatterplot](img/scatterplot.png)
 
 # 3. Analysis
 
