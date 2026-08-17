@@ -1,0 +1,557 @@
+---
+title: "LiDAR Analysis applied for Brandenburg forests"
+output: html_document
+---
+
+# Foreword
+
+LiDAR (Light Detection and Ranging) is an active remote sensing technology that generates high-resolution three-dimensional point clouds by deploying sensors on various platforms, including ground-based, airborne, and space-based systems. Its primary importance lies in its ability to provide unprecedented metric accuracy for complex structural parameters—such as canopy height, leaf area index, and diameter at breast height (DBH)—while mobile laser scanning (MLS) specifically enhances operational efficiency by acquiring georeferenced data in motion, even in hazardous or GPS-denied environments. In the context of advanced forest management, LiDAR has become the dominant tool for assessing aboveground biomass and individual tree segmentation, offering vast potential for data fusion with spectral sensors to improve species identification and habitat classification (Balestra *et al.*, 2024; Di Stefano *et al.*, 2021).
+
+The importance of LiDAR lies in its ability to provide unprecedented accuracy and detail compared to traditional surveying methods. Its key contributions include:
+
+-   Precision in Measurement: It enables the measurement of complex structural parameters, such as canopy height, leaf area index, and diameter at breast height (DBH), with accuracy that was previously unattainable.
+
+-   Operational Efficiency: Mobile systems significantly reduce the time and human effort required for large-scale data collection compared to static terrestrial scanners.
+
+-   Overcoming Environmental Barriers: LiDAR is essential for mapping challenging or hazardous areas, such as dark underground mines, caves, and tunnels, where GPS signals are denied and traditional line-of-sight is limited.
+
+-   Advanced Forest Management: In forestry, it is the dominant tool for aboveground biomass (AGB) assessments, individual tree segmentation, and fuel load estimates for fire management.
+
+-   Data Fusion Potential: It serves as a foundational dataset that, when fused with multispectral or hyperspectral data, dramatically improves species identification and habitat classification.
+
+According to Balestra *et al.* (2024), LiDAR has revolutionized forestry management by providing highly accurate, three-dimensional characterizations of forest structures that traditional passive sensors cannot achieve. Authors emphasise that LiDAR ability to penetrate the canopy and provide vertical distribution information makes it a dominant tool for both individual tree-level and area-level applications, including crown segmentation, aboveground biomass (AGB) assessments, and canopy height mapping. These capabilities directly support critical management tasks such as tree species identification, structural parameter estimation, and fuel load assessments for wildfire risk mitigation. Furthermore, the review highlights that the integration—or fusion—of LiDAR with other datasets (such as multispectral, hyperspectral, and radar) further enhances the accuracy and temporal resolution of forest attributes, facilitating more precise monitoring of carbon stocks and ecosystem health for sustainable forest resource management. Moreover, authors highlight the potential application of LiDAR analysis:
+
+-   Tree/Crown Segmentation: Precisely delineating individual trees to monitor growth and stand density.
+
+-   Aboveground Biomass (AGB): Calculating total biomass and carbon sequestration potential with high accuracy.
+
+-   Canopy Height & Vertical Structure: Mapping the 3D profile of the forest to assess habitat diversity and timber volume.
+
+-   Fuel Load Assessments: Identifying accumulated vegetation to predict and manage forest fire behavior.
+
+-   Data Fusion: Combining LiDAR with spectral data to improve species classification and health monitoring.
+
+This works documents the theoretical and practical insights gained throughout the Advanced LiDAR Analysis lecture series, bridging the gap between raw spatial data and actionable forest intelligence. Central to this work is a case application analysis of high-density point cloud tiles from Eberswalde, which served as the primary dataset for testing structural estimation techniques. The main objective of this work is to synthesize the concepts lectured during the sessions into a formal case study, establishing a rigorous processing methodology to evaluate and compare the performance of different individual tree segmentation algorithms in a temperate forest environment.
+
+As a case application, ALS data from a region in Brandenburg Federal State were analysed through RStudio by using mainly the lidR package ecosystem to perform a comprehensive Airborne Laser Scanning (ALS) workflow for forest structure assessment in Brandenburg. The processing begins with the ingestion and filtering of multiple .laz tiles, applying a spatial reference system of EPSG:25833 and cleaning noise via Statistical Outlier Removal (SOR). Core data processing involves the generation of high-resolution Digital Terrain Models (DTM), Digital Surface Models (DSM), and Canopy Height Models (CHM) using algorithms such as K-Nearest Neighbour Inverse Distance Weighting (KNN-IDW) and Delaunay Triangulation (DSM-TIN).
+
+Individual tree analysis is executed through height normalization followed by a Local Maximum Filter (LMF) with a dynamic window size to identify tree tops. The methodology emphasizes a comparative evaluation of three distinct crown segmentation algorithms: Dalponte & Coomes (2016), Li *et al.* (2012), and Silva *et al.* (2016). Statistical rigor is ensured through ANOVA and Tukey Post-Hoc tests to determine significant differences in crown area and height metrics across the different segmentation methods. The analysis concludes with the generation and export of tree geometries as ESRI™ Shapefiles (.shp) and raster products as GeoTIFFs (.tif), integrating spatial vector data with sf and raster processing with terra to provide a reproducible bridge between raw LiDAR point clouds and actionable dendrometric statistics.
+
+Results derived from the entire analysis workflow will be presented as a sampling plot level due to volume and storage restrictions. For more information, check the posted script.
+
+# 1. Methodology
+
+```{r}
+######### 1. Loading packages#######
+library(lidR)     
+library(sf)       
+library(terra)    
+library(tibble)   
+library(mapview)  
+library(ggplot2)
+library(viridis)
+library(units)
+library(writexl)
+library(dplyr)
+library(here)
+library(raster)
+library(report)
+library(tmap)
+library(tmaptools)
+```
+## 1.1 Study area
+
+The Area of Interest (AOI, [Figure 1](#Figure1)) is located on the northeastern outskirts of Eberswalde, within the Barnim district of Brandenburg, Germany, situated at the geographic transition between the Eberswalde Glacial Valley and the Barnim Nature Park. This 6 km^2^ study site is formally defined by six Brandenburg Geoportal LiDAR tiles—[als_33421-5858, als_33421-5859, als_33421-5860, als_33422-5858, als_33422-5859 and als_33422-5860](#LGB)—encompassing a diverse landscape of managed forest, water bodies, and complex glacial topography. The area serves as a primary site for forestry research and topographic analysis, characterized by the heterogeneous canopy structures and varying elevations typical of the region's terminal moraine landscape.
+
+
+```{r}
+######### 1. Loading vector files #######
+aoi <- st_read("shp/aoi.shp") #AOI
+forest <- st_read("shp/foreststands.shp") #Forest land cover, it was clipped before
+plot <- st_read("shp/plot.shp")
+
+#For border-effect, a 1 m buffer will be generated for forest areas
+wald <- st_buffer(forest, dist = 1)
+```
+```{r}
+#Figure 1. Area of Interest.
+mapview(aoi)
+```
+
+```{r}
+#Figure 2. Forest cover inside AOI.
+mapview(forest)
+```
+
+```{r}
+#Figure 3. Sampling plot location inside AOI.
+mapview(plot)
+```
+
+```{r}
+######### 3. Loading LAS Sampling Plot files #######
+
+#Merged LAS import
+plot_las <- readLAS("las/merged_las.las", select = "xyzcnr", 
+               filter = "-drop_class 12 -drop_class 7 -drop_class 0 -drop_class 1")
+
+#Forest LAS
+plot_wald_nr <- readLAS("las/wald_las.las", select = "xyzcnr", 
+                filter = "-drop_class 12 -drop_class 7 -drop_class 0 -drop_class 1")
+
+#Noise reduction LAS
+plot_las_nr <- readLAS("las/clip_lasnr.las", select = "xyzcnr", 
+                filter = "-drop_class 12 -drop_class 7 -drop_class 0 -drop_class 1")
+
+#Normalised LAS
+plot_norm <- readLAS("las/plot_norm.las", select = "xyzcnr", 
+                filter = "-drop_class 12 -drop_class 7 -drop_class 0 -drop_class 1")
+```
+
+
+
+# 2. Results
+
+As seen in Figure 1, inside AOI a sampling plot (yellow line circle) with an area of 3,14 ha and 0,628 km of circumference was delimited for clipping and intersecting the results and provide a simplified visualization for point cloud data from different approaches for saving processing memory when the sights and views are generated.
+
+## 2.1 Point cloud visualization
+
+In Figures 5 and 6 are displayed the filtered 3D LiDAR point cloud of the circular sampling plot. The visualization employs a spectral colour ramp to illustrate height above ground, with deep blue representing the forest floor and transitioning through yellow to vibrant red for the highest canopy returns. To ensure high data integrity for subsequent analysis, the raw data was cleaned and filtered using the Statistical Outlier Removal (SOR) algorithm, which calculates the mean distance between points to identify and eliminate "sky noise" and sensor artifacts. This rigorous preprocessing step results in the well-defined vertical structures visible in the plot, ultimately improving the accuracy of tree height measurements by ensuring the LMF identifies true tree tops and providing a cleaner input for precise Crown Area calculations.
+
+```{r}
+#Figure 4. 3D Point Cloud Data.
+plot(plot_las)
+```
+
+## 2.2 Elevation models
+
+In Figure 7 a side-by-side comparative analysis of two primary LiDAR-derived elevation models are illustrated: the Digital Terrain Model (DTM), representing the bare-earth topography, and the Digital Surface Model (DSM), which captures the topmost surface including the forest canopy. While the DTM reveals a smooth glacial landscape with elevations ranging from 13.24 m to 56.64 m, the DSM displays a highly textured surface reaching up to 108.17 m, directly reflecting the vertical structure of mature forest stands. This contrast highlights the transition from the underlying terrain to the irregular canopy heights, providing the necessary data for the normalization process where the DTM is subtracted from the DSM to generate the final Canopy Height Model (CHM).
+
+```{r}
+#Figure 5. DTM
+dtm <- raster("tif/dtm.tif")
+
+# Verify CRS
+crs(dtm, describe = TRUE)
+crs(dtm) <- "EPSG:25833"
+
+plot(dtm, col = hcl.colors(100, "YlOrBr", rev = TRUE),
+     main = "Digital Terrain Model",
+     xlab = "East (m)", ylab = "North (m)")
+grid(col = "grey50", lty = "dashed")
+
+```
+
+
+```{r}
+#Figure 6. DTM
+dsm <- raster("tif/dsm.tif")
+
+# Verify CRS
+crs(dsm, describe = TRUE)
+crs(dsm) <- "EPSG:25833"
+
+plot(dsm, col = hcl.colors(100, "YlOrBr", rev = TRUE),
+     main = "Digital Surface Model",
+     xlab = "East (m)", ylab = "North (m)")
+grid(col = "grey50", lty = "dashed")
+
+```
+
+## 2.3 Data normalisation
+
+Figures 8 and 9 illustrate the normalized 3D LiDAR point cloud of the circular forest sampling plot, representing a critical stage where vertical forest structure is isolated from the underlying topography. The data has been processed using the K-Nearest Neighbour Inverse Distance Weighting (KNN-IDW) algorithm to subtract the terrain elevation, effectively setting the forest floor to a base height of zero. Prior to this normalization, the raw point cloud was cleaned and filtered using the Statistical Outlier Removal (SOR) algorithm to eliminate sensor artifacts and "sky noise," ensuring the structural integrity of the trees visible in the spectral colour ramp. This high-fidelity, normalized output allows the LMF to precisely identify tree tops and provides the necessary input for the Li *et al.* (2012), Dalponte & Coomes (2016), and Silva *et al.* (2016) algorithms to calculate accurate individual tree metrics for forest site.
+
+```{r}
+#Figure 7. Normalised 3D Point Cound
+plot(plot_norm)
+```
+
+
+## 2.4 Canopy Height Model (CHM)
+
+To generate the final Canopy Height Model (CHM) from the normalized point cloud, the Points-to-Raster (P2R) algorithm is applied. This method functions by assigning the maximum height value of the LiDAR points within each grid cell to a 2D raster, effectively creating a continuous surface of the forest canopy. By using the P2R algorithm on the data previously normalized via KNN IDW and cleaned with the SOR filter, the resulting CHM maintains high spatial resolution and structural detail. This rasterized height surface then serves as the primary input for the LMF to pinpoint individual tree tops and for the previously cited algorithms to delineate crown boundaries.
+
+The generation of CHM (Figure 10) is the culmination of several rigorous preprocessing steps. CHM now provides the input for the comparative analysis of the tree crown segmentation algorithms to determine the most accurate crown area and tree height summaries through ANOVA and Tukey post-hoc testing.
+
+```{r}
+#Figure 8. CHM
+chm <- raster("tif/chm.tif")
+
+# Verify CRS
+crs(chm) <- "EPSG:25833"
+
+plot(chm, col = hcl.colors(100, "YlGn", rev = TRUE),
+     main = "Canopy Height Model",
+     xlab = "East (m)", ylab = "North (m)")
+grid(col = "grey50", lty = "dashed")
+
+```
+
+## 2.5 Crown segmentation
+
+Tree Crown segmentation algorithms cited in this work are scientifically established methods applied in this study to automate individual tree detection and quantify the complex canopy structure of the Eberswalde forest. While Li *et al.* (2012) operates directly on the normalised 3D point cloud using a spacing-based region-growing approach, Dalponte & Coomes (2016) and Silva *et al.* (2016) primarily utilise the Canopy Height Model (CHM) as their data source to delineate crowns through pixel-based growing and geometric partitioning, respectively. These distinct methods were implemented to compare their mathematical performance across the study site, providing the necessary polygon data to evaluate via ANOVA and Tukey post-hoc tests which algorithm offers the most robust and statistically significant estimation of crown area and tree density for this specific forest type.
+
+[Figure 11](#Figure11) provides a detailed spatial visualization of the Individual Tree Detection (ITD) and Crown Segmentation results, specifically focused on a single representation inside the circular sampling plot to illustrate the localized performance of each method. The analysis begins with the LMF identifying individual stems with heights ranging from 2.2 m to 34.6 m, which then serves as the input for the comparative horizontal delineation of crown boundaries using the Dalponte & Coomes (2016), Li *et al.* (2012) and Silva *et al.* (2016) algorithms. By examining these segmented polygons within the specific plot, the study captures how different mathematical approaches interpret the same Points-to-Raster (P2R) derived canopy surface.
+
+
+```{r}
+#Figure 9. Tree tops
+library(classInt)
+plot_ttops <- st_read("shp/plot_ttops.shp")
+
+# Class definition
+breaks <- classIntervals(plot_ttops$Z, n = 5, style = "jenks")
+pal <- hcl.colors(5, "YlGn", rev = TRUE)
+
+plot(st_geometry(plot_ttops),
+     col = pal[findInterval(plot_ttops$Z, breaks$brks, all.inside = TRUE)],
+     pch = 16,
+     main = "Tree Tops",
+     xlab = "East (m)", ylab = "North (m)",
+     axes = TRUE)
+grid(col = "grey50", lty = "dashed")
+legend("topright", legend = round(breaks$brks[-1], 1), 
+       col = pal, pch = 16, title = "Height (m)", cex = 0.8)
+
+```
+
+```{r}
+#Figure 10. Dalponte crown segmentation
+plot_crowns_dal <- st_read("shp/plot_test_crowns3.shp")
+
+# Class definition
+breaks <- classIntervals(plot_crowns_dal$Z_max, n = 5, style = "jenks")
+pal <- hcl.colors(5, "YlGn", rev = TRUE)
+
+plot(st_geometry(plot_crowns_dal),
+     col = pal[findInterval(plot_crowns_dal$Z_max, breaks$brks, all.inside = TRUE)],
+     pch = 16,
+     main = "Crown segmentation Dalponte & Coomes (2016)",
+     xlab = "East (m)", ylab = "North (m)",
+     axes = TRUE)
+grid(col = "grey50", lty = "dashed")
+legend("topright", legend = round(breaks$brks[-1], 1), 
+       col = pal, pch = 16, title = "Height (m)", cex = 0.8)
+
+```
+
+```{r}
+#Figure 11. Li crown segmentation
+library(classInt)
+plot_crowns_li <- st_read("shp/plot_test_li.shp")
+
+# Class definition
+breaks <- classIntervals(plot_crowns_li$Z_max, n = 5, style = "jenks")
+pal <- hcl.colors(5, "YlGn", rev = TRUE)
+
+plot(st_geometry(plot_crowns_li),
+     col = pal[findInterval(plot_crowns_li$Z_max, breaks$brks, all.inside = TRUE)],
+     pch = 16,
+     main = "Crown segmentation Li et al. (2012)",
+     xlab = "East (m)", ylab = "North (m)",
+     axes = TRUE)
+grid(col = "grey50", lty = "dashed")
+legend("topright", legend = round(breaks$brks[-1], 1), 
+       col = pal, pch = 16, title = "Height (m)", cex = 0.8)
+
+```
+
+```{r}
+#Figure 12. Silva crown segmentation
+library(classInt)
+plot_crowns_si <- st_read("shp/plot_test_si.shp")
+
+# Class definition
+breaks <- classIntervals(plot_crowns_li$Z_max, n = 5, style = "jenks")
+pal <- hcl.colors(5, "YlGn", rev = TRUE)
+
+plot(st_geometry(plot_crowns_si),
+     col = pal[findInterval(plot_crowns_si$Z_max, breaks$brks, all.inside = TRUE)],
+     pch = 16,
+     main = "Crown segmentation Silva et al. (2016)",
+     xlab = "East (m)", ylab = "North (m)",
+     axes = TRUE)
+grid(col = "grey50", lty = "dashed")
+legend("topright", legend = round(breaks$brks[-1], 1), 
+       col = pal, pch = 16, title = "Height (m)", cex = 0.8)
+
+```
+
+
+```{r}
+# Here all the crown polygons are imported for statistical analysis
+crowns_dalponte <- st_read("shp/test_crowns3.shp")
+crowns_li <- st_read("shp/test_crowns_li.shp")
+crowns_Si <- st_read("shp/test_crowns_Si.shp")
+
+crown <- rbind(crowns_dalponte, crowns_li, crowns_Si)
+```
+
+The statistical summary ([Table 1](#Table1)) provides a statistical comparison of the three crown segmentation algorithms, revealing that Li *et al.* (2012) identifies the highest number of trees (94,931) but produces the smallest average crown size (Mean: 21.11 m²) and the highest variability (SD: 21.51), likely due to its point-cloud-based sensitivity. In contrast, Silva *et al.* (2016) appears to be the most conservative and stable method, yielding the largest average crown area (Mean: 22.62 m²) with the lowest standard deviation (13.53) and the most restricted range. Dalponte & Coomes (2016) sits between the two, with a count of 63,172 and a mean area of 21.92 m², suggesting that while height detection remains relatively consistent across all methods, the choice of algorithm significantly impacts the horizontal delineation and resulting tree density metrics for the AOI.
+
+
+
+
+Table 1. Statistical summary for crown areas calculated for each segmentation algorithm. Values are given in square-meters (m^2^).
+
+|  |  |  |  |  |  |  |  |
+|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|
+| **Algorithm** | **Count** | **Mean** | **Median** | **Standard Deviation** | **Maximum** | **Minimum** | **Range** |
+| Dalponte & Coomes (2016) | 63172 | 21,92 | 20,73 | 16,57 | 182,91 | 0,0068 | 182,91 |
+| Li *et al.* (2012) | 94931 | 21,11 | 14,75 | 21,51 | 278,23 | 0,0010 | 278,23 |
+| Silva *et al.* (2016) | 62122 | 22,62 | 21,18 | 13,53 | 120,98 | 0,0070 | 120,98 |
+
+```{r}
+#Area
+summary_stats <- crown %>%
+  st_drop_geometry() %>%                
+  group_by(algorithm) %>%    
+  summarise(
+    count  = n(),
+    mean   = mean(area, na.rm = TRUE),
+    median = median(area, na.rm = TRUE),
+    sd     = sd(area, na.rm = TRUE),
+    max    = max(area, na.rm = TRUE),
+    min    = min(area, na.rm = TRUE),
+    range  = max - min
+  )
+
+print(summary_stats)
+
+```
+
+In contrast, the combined visual (Figures [12](#Figure12), [13](#Figure13) and [14](#Figure14)) and statistical analysis confirms that while the algorithms utilize the same normalized LiDAR data, their mathematical logic creates distinct data distributions for the Eberswalde study site. The boxplots show that Silva *et al.* (2016) and Dalponte & Coomes (2016) maintain higher median crown areas and tighter interquartile ranges, indicating more consistent segmentation across the plot. This is further refined by the violin plots and density plots, which reveal a heavily skewed distribution; Li *et al.* (2012) exhibits a massive density peak at the lowest area values, visually proving why it yields a significantly higher tree count (94,931) and the smallest mean area (21.11 m²). While all three methods identify a similar "long tail" of large dominant trees reaching up to 278.23 m^2^, the density curves highlight that Silva *et al.* (2016) provides the most stable representation with the lowest standard deviation (13.53), whereas Li *et al.* remains the most sensitive to small canopy gaps, resulting in high fragmentation and the greatest overall range of values.
+
+```{r}
+#Boxplot for crown area
+boxplot_area <- crown %>%
+                ggplot(aes(x = algorithm, y = area, fill = algorithm)) +
+                geom_boxplot(alpha = 0.7) + 
+                labs(
+                     title = "Crown area for different algorithms",
+                     subtitle = "Comparison of tree segmentation results",
+                     x = "Segmentation Algorithm",
+                     y = expression(Area~(m^2))) +
+                theme_minimal() +
+                theme(legend.position = "none")
+
+print(boxplot_area)
+
+```
+
+```{r}
+#Violinplot
+violin_area <- crown %>%
+               ggplot(aes(x = algorithm, y = area, fill = algorithm)) +
+               geom_violin(alpha = 0.7) + 
+               labs(
+                    title = "Crown area for different algorithms",
+                    subtitle = "Comparison of tree segmentation results",
+                    x = "Segmentation Algorithm",
+                    y = expression(Area~(m^2))) +
+               theme_minimal() +
+               theme(legend.position = "none")
+
+print(violin_area)
+```
+
+```{r}
+#Density function for Area for algorithm
+density_area <- ggplot(crown, aes(x = area, colour = algorithm)) +
+                geom_density(size = 1) +
+                labs(
+                     title = "Crown area Density Plot", 
+                     x = expression(Area~(m^2), 
+                     y = "Density")
+                     )
+
+print(density_area)
+```
+
+The comprehensive analysis demonstrates that while through P2R the CHM was generated ([Figure 10](#Figure10)), it provides a consistent vertical baseline, the choice of segmentation algorithm introduces statistically significant variations in forest inventory metrics. In contrast, the analysis of maximum height across [Table 2](#Table2) shows remarkable vertical consistency, with all algorithms capturing the same peak height of 39.93 m and maintaining similar standard deviations, suggesting that algorithmic divergence is more pronounced in horizontal delineation than in vertical estimation.
+
+Table 2. Statistical summary for maximum height estimated for each segmentation algorithm. Values are given in meters (m).
+
+|  |  |  |  |  |  |  |  |
+|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|
+| **Algorithm** | **Count** | **Mean** | **Median** | **Standard Deviation** | **Maximum** | **Minimum** | **Range** |
+| Dalponte & Coomes (2016) | 63172 | 20,35 | 21,40 | 6,68 | 39,93 | 2 | 37,93 |
+| Li **et al.** (2012) | 94931 | 19,86 | 20,82 | 6,45 | 39,93 | 2 | 37,93 |
+| Silva **et al.** (2016) | 62122 | 20,82 | 21,70 | 6,33 | 39,93 | 0 | 39,93 |
+
+```{r}
+#Height
+summary_stats_h <- crown %>%
+  st_drop_geometry() %>%                # Drops the spatial part for calculation speed
+  group_by(algorithm) %>%    # e.g., Plot_ID or Species
+  summarise(
+    count  = n(),
+    mean   = mean(Z_max, na.rm = TRUE),
+    median = median(Z_max, na.rm = TRUE),
+    sd     = sd(Z_max, na.rm = TRUE),
+    max    = max(Z_max, na.rm = TRUE),
+    min    = min(Z_max, na.rm = TRUE),
+    range  = max - min
+  )
+
+print(summary_stats_h)
+```
+
+The boxplots ([Figure 15](#Figure15)) and violin plots ([Figure 16](#Figure16)) demonstrate a high degree of overlap in the dominant canopy layer, with medians tightly clustered between 20.82 m and 21.70 m, proving that the vertical structure of the primary overstory is a robust metric regardless of the segmentation logic used. Subtle divergences are restricted to the lower strata: Li *et al.* (2012) exhibits a broader density in the 5 m to 15 m range, reflecting its higher sensitivity to understory trees, while Silva *et al.* (2016) uniquely includes ground-level returns extending to 0 m. Ultimately, this vertical stability suggests that while algorithmic choice fundamentally alters stem counts and horizontal dimensions, it provides a highly reliable and interchangeable baseline for height-dependent biomass estimations at the Eberswalde forest.
+
+On the other hand, the high degree of overlap in these density curves (Figure 17) proves that the choice of segmentation algorithm has a much smaller impact on height metrics than on crown area metrics. While the algorithms diverge in the understory—with Li *et al.* (2012) being more sensitive to intermediate layers and Silva *et al.* (2016) to ground-level returns—they are nearly indistinguishable in their characterization of the dominant canopy.
+
+```{r}
+#Boxplot for maximum height
+boxplot_h <- crown %>%
+             ggplot(aes(x = algorithm, y = Z_max, fill = algorithm)) +
+             geom_boxplot(alpha = 0.7) + 
+             labs(
+                  title = "Total height for different algorithms",
+                  subtitle = "Comparison of tree segmentation results",
+                  x = "Segmentation Algorithm",
+                  y = expression("Height [m]") 
+                  ) +
+             theme_minimal() +
+             theme(legend.position = "none")
+
+print(boxplot_h)
+
+```
+
+```{r}
+#Violin
+violin_h <- crown %>%
+            ggplot(aes(x = algorithm, y = Z_max, fill = algorithm)) +
+            geom_violin(alpha = 0.7) + 
+            labs(
+                 title = "Total height for different algorithms",
+                 subtitle = "Comparison of tree segmentation results",
+                 x = "Segmentation Algorithm",
+                 y = expression("Height [m]") 
+                 ) +
+            theme_minimal() +
+            theme(legend.position = "none")
+
+print(violin_h)
+```
+
+```{r}
+#Density function for Height for algorithm
+density_h <- ggplot(crown, aes(x = Z_max, colour = algorithm)) +
+             geom_density(size = 1) +
+             labs(title = "Height Density Plot", x = "Height [m]", y = "Density")
+
+print(density_h)
+```
+
+```{r}
+#Scatterplot
+scat <- ggplot(crown, aes(x = area, y = Z_max, color = algorithm)) + 
+        geom_point(size = 1, alpha = 0.5) + 
+        facet_wrap(~algorithm, ncol = 3) + 
+        labs(
+             title = "Relation between crown area and total height",
+             x = expression("Area"~(m^2)),
+             y = "Height [m]"
+            ) +
+        geom_smooth(method = "lm", color = "black", se = FALSE, size = 0.5) +
+        theme_minimal() +
+        theme(legend.position = "none")
+
+print(scat)
+```
+
+# 3. Analysis
+
+The ANOVA (Analysis of Variance, [Figure 19](#Figure19)) confirms that the choice of segmentation algorithm has a statistically significant impact on the resulting crown area measurements, as evidenced by a p-value of \< 2×10-16. This extremely low value, accompanied by a high F-value of 132.5, indicates that the variation observed between the Li *et al.* (2012), Dalponte & Coomes (2016), and Silva *et al.* (2016) methods is not due to random chance but reflects fundamental differences in their mathematical logic. The test demonstrates that while these algorithms process the same input data, they do not produce interchangeable forest metrics for the Eberswalde forest site. In contrast, the Tukey HSD Post-Hoc test ([Figure 20](#Figure%2020)) further clarifies these results by revealing that every pairwise comparison between the algorithms is universally significant, with all adjusted p-values remaining at 0. The analysis shows that Silva *et al.* (2016) consistently yields the largest average crown areas, while Li *et al.* (2012) systematically identifies smaller, more fragmented segments, resulting in a maximum mean difference of 1.51 m² between these two methods. These findings validate the trends seen in the boxplots ([Figure 12](#Figure12)) and density charts ([Figure 14](#Figure%2014)), confirming that the algorithmic sensitivity to canopy gaps leads to statistically distinct populations of tree crown data.
+
+```{r}
+#Crown area
+#ANOVA
+anova_crown <- aov(area ~ algorithm, data = crown)
+summary(anova_crown)
+```
+```{r}
+#PostHoc Test
+TukeyHSD(anova_crown)
+```
+
+The ANOVA results for tree height ([Figure 21](#Figure%2021)) reveal that the choice of segmentation algorithm has a statistically significant impact on the vertical data, yielding a p-value of \< 2e-16. With an F-value of 413.1, the test indicates that the variance between the three groups—Dalponte & Coomes (2016), Li *et al.* (2012), and Silva *et al.* (2016)—is substantially higher than the variance within them. This extreme significance is driven in part by the massive sample size of 220,222 degrees of freedom, allowing the model to detect even subtle mathematical discrepancies in how each algorithm processes the mid-story and ground-level returns of the Eberswalde forest.
+```{r}
+#Height
+#ANOVA
+anova_h <- aov(Z_max ~ algorithm, data = crown)
+summary(anova_h)
+```
+
+
+The Tukey HSD Post-Hoc test ([Figure 22](#Figure%2022)) further clarifies these relationships by confirming that all pairwise comparisons are universally significant with adjusted p-values of 0. The most pronounced divergence occurs between Silva *et al.* (2016) and Li *et al.* (2012), which exhibit a mean height difference of 0.95 m, likely due to Silva's inclusion of ground-level noise and Li’s high sensitivity to shorter understory trees. While Dalponte & Coomes occupies a middle ground with mean differences of approximately 0.47 m and -0.49 m against the other two methods, the practical takeaway is that while these differences are statistically real, the actual vertical variation remains under one meter, suggesting much higher algorithmic agreement in height than in crown area.
+
+```{r}
+#PostHoc Test
+TukeyHSD(anova_h)
+```
+
+# 4. Discussion
+
+In this study, the integration of Statistical Outlier Removal (SOR) and KNN-IDW normalization ensured a noise-free surface that accurately reflected the vertical structure of the Eberswalde forest. While the P2R algorithm successfully generated a high-resolution grid for the segmentation tools, the discussion must acknowledge that even a perfect CHM is interpreted differently depending on the mathematical logic of the chosen segmentation algorithm. A primary focus of the discussion is the divergence between point-based and raster-based approaches.
+
+Regarding the statistical summaries for crown segmentation algorithms, Li et al. (2012) on one side demonstrated high sensitivity, resulting in the highest tree count (94,931) and most frequent segmentation of small crown areas. This suggests that point-cloud-based region growing is more susceptible to over-segmentation in dense canopy conditions. In contrast, Silva et al. (2016) and Dalponte & Coomes (2016), being primarily raster-based, provided more conservative and stable estimations. Silva et al. (2016) produced the largest average crown areas (22.62 m²), suggesting that its geometric partitioning logic is better suited for maintaining crown integrity in mature stands.
+
+While horizontal crown area measurements are highly sensitive to segmentation logic, vertical height estimates remain remarkably stable. The crown area results demonstrated a fundamental divergence, validated by the ANOVA and Tukey HSD tests (p \< 2e-16), with the point-based logic of Li et al. (2012) producing significantly more fragmented, smaller segments compared to the conservative delineations of Silva et al. (2016). In contrast, the height analysis—supported by the high overlap in density and violin plots—shows that all three algorithms accurately captured the same dominant canopy peaks, with medians tightly grouped between 20.82 m and 21.70 m. This suggests that the algorithmic bias is primarily a horizontal phenomenon, occurring at the boundaries where tree crowns interlock or in the identification of suppressed understory stems. For forest inventory applications, these findings imply that height-driven biomass models may be less affected by the choice of software, whereas stem density and area-based metrics must be interpreted with caution due to the statistically significant "algorithmic noise" identified in this study.
+
+The ANOVA and Tukey HSD results provide the objective evidence required to conclude that these algorithms cannot be used interchangeably. The highly significant p-value (\< 2e-16) and the universal significance across all pairwise comparisons (p-adj = 0) highlight a fundamental challenge in remote sensing forestry: the "algorithmic bias". The fact that Li et al. (2012) and Silva et al. (2016) differ by a mean of 1.51 m² per crown area implies that large-scale biomass or carbon sequestration models would yield vastly different results depending solely on the software workflow selected. For the specific conditions of the Eberswalde site, the distribution curves in the density and violin plots suggest that while all methods capture dominant trees, the characterization of the understory and sub-dominant layers varies wildly. Future inventories must weigh the high sensitivity (and potential over-counting) of Li et al. against the more stable, grouped results of Silva et al. to ensure the most ecologically accurate representation of the forest structure.
+
+The synthesis of the vertical structural analysis confirms that while the ANOVA and Tukey HSD tests reveal statistically significant differences in mean heights between all three algorithms (p \< 2e-16), the practical divergence remains remarkably low compared to horizontal metrics. The extreme statistical significance is largely a byproduct of the high sample size (220,222 degrees of freedom), which allows the models to detect subtle variations such as Li et al. (2012) sensitivity to the 15 m understory layer and Silva et al. (2016) inclusion of ground-level returns. However, with a maximum mean difference of only 0.95 m between the most divergent methods and nearly identical detection of the 39.93 m canopy peak, these results suggest that vertical height is a robust, stable, and largely interchangeable metric for forest biomass modelling at the Eberswalde site.
+
+# 5. Conclusion
+
+The assessment of individual tree segmentation methods within the Eberswalde study area demonstrates that while high-density LiDAR provides a precise structural foundation, the final inventory metrics are fundamentally shaped by the mathematical logic of the applied algorithms. The systematic workflow—utilizing SOR filtering, KNN IDW normalization, and P2R rasterization—successfully produced a robust Canopy Height Model (CHM) with a maximum elevation of 39.93 m. However, the subsequent application of three distinct segmentation models revealed significant discrepancies in how this canopy is partitioned. The point-based approach of Li et al. (2012) proved most sensitive, identifying nearly 33,000 more stems than the raster-based Silva et al. (2016), which produced the most stable and conservative crown delineations. The ANOVA and Tukey HSD tests provided definitive proof that these variations in crown area are statistically significant (p \< 2e-16), confirming that horizontal results from these three methods cannot be directly compared or used interchangeably in carbon or biomass models.
+
+In contrast to this horizontal variability, the analysis of maximum tree height demonstrates a high degree of vertical consistency across all evaluated methods. While the ANOVA and Tukey HSD tests confirm that differences in mean height remain statistically significant (p \< 2e-16), the actual magnitude of these differences is minimal, with a maximum mean gap of only 0.95 m between the most divergent algorithms. The violin and density plots further clarify that the algorithms are nearly indistinguishable within the dominant overstory, with vertical discrepancies limited primarily to the detection of ground-level returns in Silva et al. (2016) and intermediate understory layers in Li et al. (2012). Ultimately, the choice of a segmentation algorithm must be aligned with specific management goals: for high-precision stem counts and understory detection, Li et al. is preferable, while Silva et al. (2016) or Dalponte & Coomes (2016) offer more reliable horizontal crown area estimates for mature stands. This study underscores that while tree height is a robust and stable metric for forest resource assessment, rigorous statistical selection of the segmentation algorithm is essential for any analysis involving horizontal canopy dimensions.
+
+In summary, Advanced LiDAR Analysis module’s lectures and the Eberswalde case study confirms that analysing LiDAR data is not only technically feasible but essential for transitioning from traditional fieldwork to a data-intensive, multi-scalar forestry discipline. By establishing a rigorous processing methodology—integrating SOR filtering, KNN-IDW normalization, and P2R rasterization—this work successfully transformed raw point clouds into high-resolution models that reveal both the precision and the inherent "algorithmic bias" of modern remote sensing tools. While the analysis demonstrated that vertical height is a robust and stable metric across different software logics, it also highlighted that horizontal crown area and stem density are highly sensitive to the chosen algorithm, with the point-based sensitivity of Li et al. (2012) contrasting sharply with the conservative stability of Silva et al. (2016). Ultimately, this integration of theoretical principles and practical application underscores that the "gold standard" for forest management now lies in the technical rigor of the data scientist, whose ability to navigate these algorithmic discrepancies is vital for accurate biomass and carbon monitoring.
+
+# 6. References
+
+Appelhans, T., Detsch, F., Reudenbach, C. & Woellauer, S. (2025). mapview: Interactive Viewing of Spatial Data in R. <https://doi.org/10.32614/CRAN.package.mapview>, R package version 2.11.4.
+
+Balestra, M., Marselis, S., Sankey, T. T., Cabo, C., Liang, X., Mokroš, M., Peng, X., Singh, A., Sterenczak, K., Vega, C., Vincent, G. and Hollaus, M. (2024). LiDAR data fusion to improve forest attribute estimates: A review. Current Forestry Reports, 10(3), 281-297. <https://doi.org/10.1007/s40725-024-00223-7>
+
+Dalponte, M., & Coomes, D. A. (2016). Tree‐centric mapping of forest carbon density from Airborne Laser Scanning and hyperspectral data. Methods in Ecology and Evolution, 7(10), 1236–1245. <https://doi.org/10.1111/2041-210X.12575>
+
+Di Stefano, F., Chiappini, S., Gorreja, A., Balestra, M., & Pierdicca, R. (2021). Mobile 3D SCAN LIDAR: A literature review. Geomatics, Natural Hazards and Risk, 12(1), 2387–2429. <https://doi.org/10.1080/19475705.2021.1964617>
+
+Garnier, S., Ross, N., Rudis, R., Camargo, P., Sciaini, M. & Scherer, C. (2023). viridis(Lite) - Colorblind-Friendly Color Maps for R. <https://doi.org/10.5281/zenodo.4678327>, viridisLite package version 0.4.2.
+
+Garnier, S., Ross, N., Rudis, R., Camargo, P., Sciaini, M. & Scherer, C. (2024). viridis(Lite) - Colorblind-Friendly Color Maps for R. <https://doi.org/10.5281/zenodo.4679423>, viridis package version 0.6.5.
+
+Hijmans, R (2025). terra: Spatial Data Analysis. <https://doi.org/10.32614/CRAN.package.terra>, R package version 1.8-86.
+
+Landesvermessung und Geobasisinformation Brandenburg. (2024). Laserscandaten: Einzelkacheln mit 1m Gitterweite im LAZ-Format. Retrieved from <https://data.geobasis-bb.de/geobasis/daten/als/laz/>
+
+Li, W., Guo, Q., Jakubowski, M. K., & Kelly, M. (2012). A new method for segmenting individual trees from the Lidar Point Cloud. *Photogrammetric Engineering & Remote Sensing, 78*(1), 75–84. <https://doi.org/10.14358/PERS.78.1.75>
+
+Makowski, D., Lüdecke, D., Patil, I., Thériault, R., Ben-Shachar, M. & Wiernik, B. (2023). “Automated Results Reporting as a Practical Tool to Improve Reproducibility and Methodological Best Practices Adoption.” CRAN. <https://doi.org/10.32614/CRAN.package.report>, <https://easystats.github.io/report/>.
+
+Müller K (2025). here: A Simpler Way to Find Your Files. <https://doi.org/10.32614/CRAN.package.here>, R package version 1.0.2.
+
+Müller, K. & Wickham, H. (2025). tibble: Simple Data Frames. <https://doi.org/10.32614/CRAN.package.tibble>, R package version 3.3.0.
+
+Ooms, J. (2025). writexl: Export Data Frames to Excel 'xlsx' Format. <https://doi.org/10.32614/CRAN.package.writexl>, R package version 1.5.4.
+
+Pebesma, E. & Bivand, R. (2023). Spatial Data Science: With applications in R. Chapman and Hall/CRC. <https://doi.org/10.1201/9780429459016>, <https://r-spatial.org/book/>.
+
+Pebesma, E. (2018). Simple Features for R: Standardized Support for Spatial Vector Data. *The R Journal, 10*(1), 439-446. <https://doi.org/10.32614/RJ-2018-009>.
+
+Pebesma, E., Mailund, T. & Hiebert, J. (2016). Measurement Units in R. *R Journal, 8*(2), 486-494. <https://doi.org/10.32614/RJ-2016-061>.
+
+Roussel, J., Auty, D., Coops, N. C., Tompalski, P., Goodbody, T. R., Meador, A. S., Bourdon, J., de Boissieu, F. & Achim, A. (2020). lidR: An R package for analysis of Airborne Laser Scanning (ALS) data. Remote Sensing of Environment, 251, 112061. ISSN 0034-4257, <https://doi.org/10.1016/j.rse.2020.112061>. Roussel, J., Auty, D. (2026). Airborne LiDAR Data Manipulation and Visualization for Forestry Applications. R package version 4.2.2.
+
+Silva, C. A., Hudak, A. T., Vierling, L. A., Loudermilk, E. L., O’Brien, J. J., Hiers, J. K., Jack, St. B., Gonzalez-Benecke, C., Lee, H., Falkowski, M. J., Khosravipour, A. (2016). Imputation of Individual Longleaf Pine (Pinus palustris Mill.) Tree Attributes from Field and LiDAR Data. *Canadian Journal of Remote Sensing, 42*(5), 554–573. <https://doi.org/10.1080/07038992.2016.1196582>
+
+Wickham, H. (2016). ggplot2: Elegant Graphics for Data Analysis. Springer-Verlag New York. ISBN 978-3-319-24277-4, <https://ggplot2.tidyverse.org>.
+
+Wickham H, François R, Henry L, Müller K, Vaughan D (2023). dplyr: A Grammar of Data Manipulation. <https://doi.org/10.32614/CRAN.package.dplyr>, R package version 1.1.4.
