@@ -239,6 +239,7 @@ wald <- st_buffer(forest, dist = 1)
 #Figure 1. Area of Interest.
 mapview(aoi)
 ```
+![AOI](img/AOI.jpeg)
 
 ```{=html}
 <div class="leaflet html-widget html-fill-item" id="htmlwidget-8233b5a3ec056758ddec" style="width:672px;height:480px;"></div>
@@ -276,7 +277,9 @@ plot_las <- readLAS("las/merged_las.las", select = "xyzcnr",
                filter = "-drop_class 12 -drop_class 7 -drop_class 0 -drop_class 1")
 ```
 
-                                                                                
+
+                                                                                
+
 
 ``` r
 #Forest LAS
@@ -284,7 +287,9 @@ plot_wald_nr <- readLAS("las/wald_las.las", select = "xyzcnr",
                 filter = "-drop_class 12 -drop_class 7 -drop_class 0 -drop_class 1")
 ```
 
-                                                                                
+
+                                                                                
+
 
 ``` r
 #Noise reduction LAS
@@ -292,7 +297,9 @@ plot_las_nr <- readLAS("las/clip_lasnr.las", select = "xyzcnr",
                 filter = "-drop_class 12 -drop_class 7 -drop_class 0 -drop_class 1")
 ```
 
-                                                                                
+
+                                                                                
+
 
 ``` r
 #Normalised LAS
@@ -300,7 +307,9 @@ plot_norm <- readLAS("las/plot_norm.las", select = "xyzcnr",
                 filter = "-drop_class 12 -drop_class 7 -drop_class 0 -drop_class 1")
 ```
 
-                                                                                
+
+                                                                                
+
 
 
 
