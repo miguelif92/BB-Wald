@@ -1,6 +1,6 @@
 ---
 title: "LiDAR Analysis applied for Brandenburg forests"
-output: html_document
+output: rmarkdown::github_document
 ---
 
 # Foreword
